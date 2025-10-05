@@ -1,28 +1,20 @@
 package com.capstone.service.impl;
 
-import com.capstone.dto.response.CapsuleResponseDto;
-import com.capstone.dto.response.PaginatedResponseDto;
-import com.capstone.exception.*;
+import com.capstone.exception.CapsuleProcessingException;
+import com.capstone.exception.DuplicateCapsuleException;
 import com.capstone.mapper.CapsuleEventMapper;
-import com.capstone.mapper.CapsuleMapper;
-import com.capstone.model.AtomSnapshot;
-import com.capstone.model.CapsuleAtomMapping;
 import com.capstone.model.CapsuleSnapshot;
 import com.capstone.repository.CapsuleSnapshotRepository;
-import com.capstone.service.AtomSnapshotService;
 import com.capstone.service.CapsuleSnapshotService;
-import com.capstone.util.PaginationUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.common.event.SkillCapsuleEvent;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.*;
-import java.util.stream.Collectors;
+import java.util.Optional;
+import java.util.UUID;
 
 @Service
 @Slf4j
@@ -32,8 +24,6 @@ public class CapsuleSnapshotServiceImpl implements CapsuleSnapshotService {
 
     private final CapsuleSnapshotRepository capsuleSnapshotRepository;
     private final CapsuleEventMapper capsuleEventMapper;
-    private final AtomSnapshotService atomSnapshotService;
-    private final CapsuleMapper capsuleMapper;
 
     @Override
     public CapsuleSnapshot processCapsuleEvent(SkillCapsuleEvent event) {
@@ -104,197 +94,5 @@ public class CapsuleSnapshotServiceImpl implements CapsuleSnapshotService {
     public Optional<CapsuleSnapshot> findByCapsuleId(UUID capsuleId) {
         log.debug("Finding capsule by CapsuleId: {}", capsuleId);
         return capsuleSnapshotRepository.findByCapsuleId(capsuleId);
-    }
-
-    @Override
-    public void smartUpdateCapsuleAtomMappings(CapsuleSnapshot capsule, List<Map<UUID, Integer>> skillAtomMappings) {
-        log.debug("Smart updating atom mappings for capsule: {}", capsule.getCapsuleId());
-
-        try {
-            // PHASE 1: VERIFY ALL ATOMS EXIST - Fail Fast Strategy
-            List<AtomSequencePair> newMappings = verifyAndParseAtoms(skillAtomMappings);
-            log.debug("Verified {} atom mappings for capsule {}", newMappings.size(), capsule.getCapsuleId());
-
-            // PHASE 2: ANALYZE CHANGES - Smart Diff Algorithm
-            UpdateAnalysis analysis = analyzeChanges(capsule, newMappings);
-            log.debug("Analysis for capsule {}: {} to add, {} to update",
-                    capsule.getCapsuleId(), analysis.getToAdd().size(), analysis.getToUpdate().size());
-
-            // PHASE 3: APPLY UPDATES - Atomic Operation
-            applyAtomMappingUpdates(capsule, analysis);
-
-            log.info("Smart update completed for capsule {}: {} added, {} updated, {} preserved",
-                    capsule.getCapsuleId(), analysis.getToAdd().size(),
-                    analysis.getToUpdate().size(), analysis.getPreserved());
-
-        } catch (AtomNotFoundException e) {
-            log.error("Atom verification failed for capsule {}: {}", capsule.getCapsuleId(), e.getMessage());
-            throw new CapsuleAtomMappingException("Atom not found: " + e.getMessage());
-        } catch (Exception e) {
-            log.error("Smart update failed for capsule {}: {}", capsule.getCapsuleId(), e.getMessage(), e);
-            throw new CapsuleAtomMappingException( "Smart update failed", e);
-        }
-    }
-
-    /**
-     * Verify all atoms exist and parse into structured format
-     */
-    private List<AtomSequencePair> verifyAndParseAtoms(List<Map<UUID, Integer>> skillAtomMappings) {
-        List<AtomSequencePair> parsedMappings = new ArrayList<>();
-
-        for (Map<UUID, Integer> atomMap : skillAtomMappings) {
-            for (Map.Entry<UUID, Integer> entry : atomMap.entrySet()) {
-                UUID atomId = entry.getKey();
-                Integer sequence = entry.getValue();
-
-                // Verify atom exists
-                AtomSnapshot atom = atomSnapshotService.findBySkillAtomId(atomId)
-                        .orElseThrow(() -> new AtomNotFoundException(atomId));
-
-                // Validate sequence order
-                if (sequence == null || sequence < 1) {
-                    throw new CapsuleAtomMappingException(null, atomId, "Invalid sequence order: " + sequence);
-                }
-
-                parsedMappings.add(new AtomSequencePair(atom, sequence));
-            }
-        }
-
-        return parsedMappings;
-    }
-
-    /**
-     * Analyze differences between existing and new mappings
-     */
-    private UpdateAnalysis analyzeChanges(CapsuleSnapshot capsule, List<AtomSequencePair> newMappings) {
-        // Build lookup map of existing mappings - O(n)
-        Map<UUID, CapsuleAtomMapping> existingMap = capsule.getCapsuleAtomMappings()
-                .stream()
-                .collect(Collectors.toMap(
-                        mapping -> mapping.getSkillAtom().getAtomId(),
-                        mapping -> mapping
-                ));
-
-        List<CapsuleAtomMapping> toAdd = new ArrayList<>();
-        List<CapsuleAtomMapping> toUpdate = new ArrayList<>();
-        int preserved = 0;
-
-        // Process each new mapping - O(m)
-        for (AtomSequencePair newMapping : newMappings) {
-            UUID atomId = newMapping.getAtom().getAtomId();
-
-            if (existingMap.containsKey(atomId)) {
-                // ATOM EXISTS - Check if sequence changed
-                CapsuleAtomMapping existing = existingMap.get(atomId);
-                if (!existing.getSequenceOrder().equals(newMapping.getSequence())) {
-                    existing.setSequenceOrder(newMapping.getSequence());
-                    toUpdate.add(existing);
-                } else {
-                    preserved++; // No change needed
-                }
-                // Remove from map to track what remains
-                existingMap.remove(atomId);
-            } else {
-                // NEW ATOM - Create mapping
-                CapsuleAtomMapping newMappingEntity = CapsuleAtomMapping.builder()
-                        .skillCapsule(capsule)
-                        .skillAtom(newMapping.getAtom())
-                        .sequenceOrder(newMapping.getSequence())
-                        .build();
-                toAdd.add(newMappingEntity);
-            }
-        }
-
-        // Remaining mappings in existingMap are preserved (not in new event)
-        preserved += existingMap.size();
-
-        return new UpdateAnalysis(toAdd, toUpdate, preserved);
-    }
-
-    /**
-     * Apply the analyzed updates to the capsule
-     */
-    private void applyAtomMappingUpdates(CapsuleSnapshot capsule, UpdateAnalysis analysis) {
-        if (!analysis.getToAdd().isEmpty()) {
-            capsule.getCapsuleAtomMappings().addAll(analysis.getToAdd());
-        }
-    }
-
-
-    @Override
-    public CapsuleSnapshot assignAtomsToCapsule(SkillCapsuleEvent event) {
-        log.info("Assigning atoms to capsule for capsuleId: {}", event.getId());
-
-        try {
-            // Find existing capsule WITH atom mappings - prevents lazy initialization error
-            Optional<CapsuleSnapshot> existingCapsule = capsuleSnapshotRepository.findByCapsuleIdWithAtomMappings(event.getId());
-
-            if (existingCapsule.isEmpty()) {
-                throw new CapsuleNotFoundException(event.getId());
-            }
-
-            CapsuleSnapshot capsule = existingCapsule.get();
-            log.info("Found existing capsule for assignment: {} with {} existing atom mappings",
-                    capsule.getCapsuleId(), capsule.getCapsuleAtomMappings().size());
-
-            // Use existing smart update logic to assign atoms
-            if (event.getSkillAtom() != null && !event.getSkillAtom().isEmpty()) {
-                smartUpdateCapsuleAtomMappings(capsule, event.getSkillAtom());
-
-                // Save the updated capsule
-                CapsuleSnapshot updatedCapsule = capsuleSnapshotRepository.save(capsule);
-
-                log.info("Successfully assigned {} atoms to capsule {}, total mappings now: {}",
-                        event.getSkillAtom().size(), updatedCapsule.getCapsuleId(),
-                        updatedCapsule.getCapsuleAtomMappings().size());
-
-                return updatedCapsule;
-            } else {
-                throw new CapsuleAtomMappingException("No skill atom mappings provided for assignment");
-            }
-
-        } catch (CapsuleNotFoundException e) {
-            log.error("Capsule not found for assignment with ID: {}", event.getId(), e);
-            throw e;
-        } catch (Exception e) {
-            log.error("Unexpected error assigning atoms to capsule with ID: {}", event.getId(), e);
-            throw new CapsuleProcessingException("Failed to assign atoms to capsule", e);
-        }
-    }
-
-    @Override
-    public Optional<CapsuleResponseDto> findByCapsuleIdWithAtomSummaries(UUID skillCapsuleId) {
-        return Optional.empty();
-    }
-
-    @Override
-    public PaginatedResponseDto<CapsuleResponseDto> findAllBasic(Pageable pageable) {
-        log.debug("Finding all skill capsules with basic info, page: {}, size: {}", pageable.getPageNumber(), pageable.getPageSize());
-        Page<CapsuleSnapshot> pageData = capsuleSnapshotRepository.findAll(pageable);
-        Page<CapsuleResponseDto> dtoPage = pageData.map(capsuleMapper::toBasicResponseDto);
-        return PaginationUtil.toPaginatedResponse(dtoPage);
-    }
-
-    @Override
-    public PaginatedResponseDto<CapsuleResponseDto> findAllWithAtomSummaries(Pageable pageable) {
-        log.debug("Finding all skill capsules with atom summaries, page: {}, size: {}", pageable.getPageNumber(), pageable.getPageSize());
-        Page<CapsuleSnapshot> pageData = capsuleSnapshotRepository.findAllWithAtomMappings(pageable);
-        Page<CapsuleResponseDto> dtoPage = pageData.map(capsuleMapper::toResponseDtoWithAtoms);
-        return PaginationUtil.toPaginatedResponse(dtoPage);
-    }
-
-    @lombok.Data
-    @lombok.AllArgsConstructor
-    private static class AtomSequencePair {
-        private AtomSnapshot atom;
-        private Integer sequence;
-    }
-
-    @lombok.Data
-    @lombok.AllArgsConstructor
-    private static class UpdateAnalysis {
-        private List<CapsuleAtomMapping> toAdd;
-        private List<CapsuleAtomMapping> toUpdate;
-        private int preserved;
     }
 }
