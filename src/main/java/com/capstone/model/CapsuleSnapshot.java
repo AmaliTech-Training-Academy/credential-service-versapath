@@ -8,6 +8,8 @@ import lombok.*;
 import org.hibernate.annotations.UuidGenerator;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
@@ -17,7 +19,7 @@ import java.util.UUID;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@ToString(exclude = {"issuedBadges"})
+@ToString(exclude = {"issuedBadges", "capsuleAtomMappings"})
 public class CapsuleSnapshot {
 
     @Id
@@ -52,6 +54,11 @@ public class CapsuleSnapshot {
 
     @OneToMany(mappedBy = "capsuleSnapshot", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     private Set<IssuedBadge> issuedBadges;
+
+    @OneToMany(mappedBy = "skillCapsule", cascade = CascadeType.ALL, fetch = FetchType.LAZY, orphanRemoval = true)
+    @OrderBy("sequenceOrder ASC")
+    @Builder.Default
+    private List<CapsuleAtomMapping> capsuleAtomMappings = new ArrayList<>();
 
     @PrePersist
     protected void onCreate() {

@@ -15,6 +15,7 @@ public interface CapsuleEventMapper {
     @Mapping(target = "createdAt", ignore = true)
     @Mapping(target = "updatedAt", ignore = true)
     @Mapping(target = "issuedBadges", ignore = true)
+    @Mapping(target = "capsuleAtomMappings", ignore = true)
     CapsuleSnapshot toCapsuleSnapshot(SkillCapsuleEvent event);
 
     @Mapping(source = "name", target = "capsuleName")
@@ -24,5 +25,6 @@ public interface CapsuleEventMapper {
     @Mapping(target = "createdAt", ignore = true)
     @Mapping(target = "updatedAt", ignore = true)
     @Mapping(target = "issuedBadges", ignore = true)
+    @Mapping(target = "capsuleAtomMappings", ignore = true)
     void updateCapsuleSnapshot(SkillCapsuleEvent event, @MappingTarget CapsuleSnapshot capsuleSnapshot);
 }
