@@ -17,7 +17,7 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-@ToString(exclude = {"badges"})
+@ToString(exclude = {"issuedBadges"})
 public class Issuer {
 
     @Id
@@ -48,9 +48,8 @@ public class Issuer {
     private LocalDateTime updatedAt;
 
     // Relationships
-    @OneToMany(mappedBy = "issuer", cascade =
-            CascadeType.ALL, fetch = FetchType.LAZY)
-    private Set<Badge> badges;
+    @OneToMany(mappedBy = "issuer", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    private Set<IssuedBadge> issuedBadges;
 
     @PrePersist
     protected void onCreate() {
