@@ -14,4 +14,5 @@ public interface CapsuleSnapshotService {
     CapsuleSnapshot updateCapsule(CapsuleSnapshot existingCapsule, SkillCapsuleEvent event);
     Optional<CapsuleSnapshot> findByCapsuleId(UUID skillCapsuleId);
     void smartUpdateCapsuleAtomMappings(CapsuleSnapshot capsule, List<Map<UUID, Integer>> skillAtomMappings);
+    CapsuleSnapshot assignAtomsToCapsule(SkillCapsuleEvent event);
 }
